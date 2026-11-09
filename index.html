@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>リッチ・スイカゲーム</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Matter.js for 2D Physics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    
+    <style>
+        body {
+            background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+            touch-action: none; /* Prevent scroll on touch */
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 420px;
+            aspect-ratio: 2 / 3;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            margin: 0 auto;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            border-radius: 20px;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 1rem;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            padding: 0.5rem 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            pointer-events: auto;
+        }
+
+        /* 落下限界線のスタイル */
+        #danger-line {
+            position: absolute;
+            top: 15%;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: repeating-linear-gradient(
+                90deg,
+                #ff4757,
+                #ff4757 10px,
+                transparent 10px,
+                transparent 20px
+            );
+            opacity: 0.5;
+            z-index: 10;
+        }
+
+        #danger-line.warning {
+            animation: flash 0.5s infinite alternate;
+            opacity: 1;
+        }
+
+        @keyframes flash {
+            from { opacity: 0.5; }
+            to { opacity: 1; box-shadow: 0 0 10px #ff4757; }
+        }
+
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.8);
+            backdrop-filter: blur(5px);
+            z-index: 50;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col items-center justify-center p-4">
+
+    <!-- Header / Title -->
+    <div class="mb-4 text-center">
+        <h1 class="text-3xl font-extrabold text-gray-800 tracking-tight drop-shadow-sm">🍉 Suika Drop</h1>
+        <p class="text-sm text-gray-500 font-medium">同じフルーツをくっつけて大きくしよう！</p>
+    </div>
+
+    <!-- Game Area -->
+    <div id="game-container">
+        <!-- Canvas for Physics & Rendering -->
+        <canvas id="game-canvas"></canvas>
+        
+        <!-- Danger Line (Game Over Threshold) -->
+        <div id="danger-line"></div>
+
+        <!-- UI Overlay -->
+        <div id="ui-layer">
+            <div class="flex justify-between items-start">
+                <div class="glass-panel flex flex-col items-center">
+                    <span class="text-xs text-gray-500 font-bold uppercase tracking-wider">Score</span>
+                    <span id="score-display" class="text-2xl font-black text-gray-800">0</span>
+                </div>
+                <div class="glass-panel flex flex-col items-center">
+                    <span class="text-xs text-gray-500 font-bold uppercase tracking-wider">Next</span>
+                    <div id="next-fruit-display" class="text-3xl mt-1">🍒</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over">
+            <h2 class="text-4xl font-black text-red-500 mb-2">GAME OVER</h2>
+            <p class="text-gray-700 font-bold mb-6">Score: <span id="final-score" class="text-2xl">0</span></p>
+            <button onclick="resetGame()" class="px-8 py-3 bg-gradient-to-r from-green-400 to-emerald-500 text-white font-bold rounded-full shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all active:translate-y-0">
+                もう一度遊ぶ
+            </button>
+        </div>
+    </div>
+
+<script>
+    /**
+     * フルーツの定義（段階、サイズ、絵文字、色、獲得スコア）
+     */
+    const FRUITS = [
+        { name: "Cherry", radius: 15, emoji: "🍒", color: "#ff0800", score: 1 },
+        { name: "Strawberry", radius: 22, emoji: "🍓", color: "#ff2a2a", score: 3 },
+        { name: "Grape", radius: 30, emoji: "🍇", color: "#8a2be2", score: 6 },
+        { name: "Dekopon", radius: 38, emoji: "🍊", color: "#ffa500", score: 10 },
+        { name: "Persimmon", radius: 48, emoji: "🍅", color: "#ff8c00", score: 15 },
+        { name: "Apple", radius: 58, emoji: "🍎", color: "#ff0000", score: 21 },
+        { name: "Pear", radius: 68, emoji: "🍐", color: "#cddc39", score: 28 },
+        { name: "Peach", radius: 80, emoji: "🍑", color: "#ffc0cb", score: 36 },
+        { name: "Pineapple", radius: 95, emoji: "🍍", color: "#ffeb3b", score: 45 },
+        { name: "Melon", radius: 110, emoji: "🍈", color: "#98fb98", score: 55 },
+        { name: "Watermelon", radius: 130, emoji: "🍉", color: "#3cb371", score: 66 }
+    ];
+
+    // Matter.jsモジュール (ここでMatterが使われるため、必ずスクリプトより前にCDNを読む必要があります)
+    const Engine = Matter.Engine,
+          Render = Matter.Render,
+          Runner = Matter.Runner,
+          Bodies = Matter.Bodies,
+          Composite = Matter.Composite,
+          Events = Matter.Events,
+          Body = Matter.Body;
+
+    let engine, world, runner;
+    let canvas, ctx;
+    let width, height;
+    
+    // ゲーム状態
+    let currentFruit = null;    // 現在操作中の落下前フルーツ
+    let nextFruitIndex = 0;     // 次に落ちてくるフルーツ
+    let score = 0;
+    let isGameOver = false;
+    let canDrop = true;         // 連続落下防止フラグ
+    let particles = [];         // 合体時のエフェクト用
+
+    // DOM Elements
+    const scoreDisplay = document.getElementById('score-display');
+    const nextFruitDisplay = document.getElementById('next-fruit-display');
+    const gameOverScreen = document.getElementById('game-over');
+    const finalScoreDisplay = document.getElementById('final-score');
+    const dangerLine = document.getElementById('danger-line');
+
+    // 定数
+    const WALL_THICKNESS = 60;
+    const DROP_COOLDOWN = 800; // ms
+    
+    function init() {
+        canvas = document.getElementById('game-canvas');
+        ctx = canvas.getContext('2d');
+        
+        // コンテナのサイズに合わせてキャンバスを設定
+        const container = document.getElementById('game-container');
+        width = container.clientWidth;
+        height = container.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        // Matter.jsエンジンの初期化
+        engine = Engine.create();
+        world = engine.world;
+        
+        // 物理演算の設定（少し重力を調整してぽよんとした動きに）
+        engine.gravity.y = 1.2;
+
+        // 壁と床を作成
+        const ground = Bodies.rectangle(width / 2, height + WALL_THICKNESS/2 - 10, width + 100, WALL_THICKNESS, { 
+            isStatic: true, 
+            render: { visible: false },
+            restitution: 0.2
+        });
+        const leftWall = Bodies.rectangle(-WALL_THICKNESS/2, height/2, WALL_THICKNESS, height * 2, { 
+            isStatic: true, 
+            render: { visible: false } 
+        });
+        const rightWall = Bodies.rectangle(width + WALL_THICKNESS/2, height/2, WALL_THICKNESS, height * 2, { 
+            isStatic: true, 
+            render: { visible: false } 
+        });
+
+        Composite.add(world, [ground, leftWall, rightWall]);
+
+        // イベントリスナーの登録
+        registerEvents();
+
+        // カスタム描画ループの開始
+        requestAnimationFrame(renderLoop);
+
+        // エンジンの実行
+        runner = Runner.create();
+        Runner.run(runner, engine);
+
+        // ゲームの初期状態セットアップ
+        generateNextFruit();
+        spawnCurrentFruit(width / 2);
+    }
+
+    // 次のフルーツをランダムに決定（0~4の小さいフルーツ）
+    function generateNextFruit() {
+        nextFruitIndex = Math.floor(Math.random() * 5);
+        nextFruitDisplay.innerText = FRUITS[nextFruitIndex].emoji;
+    }
+
+    // 落下前のフルーツを生成（マウス/指に追従）
+    function spawnCurrentFruit(x) {
+        if (isGameOver) return;
+        
+        const fruitDef = FRUITS[nextFruitIndex];
+        // 画面外にはみ出ないようにX座標を制限
+        const safeX = Math.max(fruitDef.radius, Math.min(width - fruitDef.radius, x));
+        
+        currentFruit = Bodies.circle(safeX, 50, fruitDef.radius, {
+            isStatic: true, // 落下までは固定
+            isSensor: true, // 衝突判定なし
+            fruitIndex: nextFruitIndex,
+            friction: 0.2,
+            restitution: 0.3,
+            density: 0.001 * fruitDef.radius // 大きいほど重く
+        });
+
+        Composite.add(world, currentFruit);
+        generateNextFruit();
+        canDrop = true;
+    }
+
+    // フルーツを落下させる
+    function dropFruit() {
+        if (!currentFruit || !canDrop || isGameOver) return;
+        
+        canDrop = false;
+        // センサーと静的状態を解除して落下開始
+        Body.setStatic(currentFruit, false);
+        currentFruit.isSensor = false;
+        
+        currentFruit = null;
+
+        // クールダウン後に次のフルーツを出現させる
+        setTimeout(() => {
+            if (!isGameOver) {
+                spawnCurrentFruit(width / 2);
+            }
+        }, DROP_COOLDOWN);
+    }
+
+    // 操作処理（マウス・タッチ）
+    function registerEvents() {
+        const container = document.getElementById('game-container');
+
+        const moveFruit = (e) => {
+            if (!currentFruit || !canDrop || isGameOver) return;
+            
+            // クライアント座標からキャンバス内のX座標を計算
+            const rect = canvas.getBoundingClientRect();
+            let clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            let x = clientX - rect.left;
+            
+            const fruitDef = FRUITS[currentFruit.fruitIndex];
+            const safeX = Math.max(fruitDef.radius, Math.min(width - fruitDef.radius, x));
+            
+            Body.setPosition(currentFruit, { x: safeX, y: currentFruit.position.y });
+        };
+
+        container.addEventListener('mousemove', moveFruit);
+        container.addEventListener('touchmove', moveFruit, { passive: false });
+
+        const handleDrop = (e) => {
+            e.preventDefault(); // タッチ時のスクロール等防止
+            if (currentFruit && canDrop) {
+                if(e.type === 'touchstart' || e.type === 'touchmove'){
+                     moveFruit(e);
+                }
+                dropFruit();
+            }
+        };
+
+        container.addEventListener('mouseup', handleDrop);
+        container.addEventListener('touchend', handleDrop);
+
+        // 衝突（合体）イベント
+        Events.on(engine, 'collisionStart', (event) => {
+            const pairs = event.pairs;
+
+            for (let i = 0; i < pairs.length; i++) {
+                const bodyA = pairs[i].bodyA;
+                const bodyB = pairs[i].bodyB;
+
+                // 両方がフルーツであり、同じ種類であり、スイカ(10)未満である場合
+                if (bodyA.fruitIndex !== undefined && bodyB.fruitIndex !== undefined) {
+                    if (bodyA.fruitIndex === bodyB.fruitIndex && bodyA.fruitIndex < 10) {
+                        
+                        // 既に合体処理中の場合はスキップ（多重衝突防止）
+                        if (bodyA.isMerging || bodyB.isMerging) continue;
+                        bodyA.isMerging = true;
+                        bodyB.isMerging = true;
+
+                        const newIndex = bodyA.fruitIndex + 1;
+                        const midX = (bodyA.position.x + bodyB.position.x) / 2;
+                        const midY = (bodyA.position.y + bodyB.position.y) / 2;
+
+                        // スコア加算
+                        addScore(FRUITS[newIndex].score);
+                        createParticles(midX, midY, FRUITS[newIndex].color);
+
+                        // 少し遅延させて削除と追加を行う（物理エンジンの安定化のため）
+                        Matter.World.remove(world, bodyA);
+                        Matter.World.remove(world, bodyB);
+
+                        const newFruitDef = FRUITS[newIndex];
+                        const newFruit = Bodies.circle(midX, midY, newFruitDef.radius, {
+                            fruitIndex: newIndex,
+                            friction: 0.2,
+                            restitution: 0.3,
+                            density: 0.001 * newFruitDef.radius
+                        });
+                        
+                        Matter.World.add(world, newFruit);
+                    }
+                }
+            }
+        });
+    }
+
+    function addScore(points) {
+        score += points;
+        scoreDisplay.innerText = score;
+        
+        // スコアアニメーション
+        scoreDisplay.classList.add('scale-150', 'text-green-500');
+        setTimeout(() => {
+            scoreDisplay.classList.remove('scale-150', 'text-green-500');
+            scoreDisplay.classList.add('transition-all', 'duration-300');
+        }, 150);
+    }
+
+    // パーティクルエフェクトの生成
+    function createParticles(x, y, color) {
+        for (let i = 0; i < 15; i++) {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 10,
+                vy: (Math.random() - 0.5) * 10,
+                radius: Math.random() * 4 + 2,
+                color: color,
+                alpha: 1,
+                life: 1
+            });
+        }
+    }
+
+    // パーティクルの更新と描画
+    function updateAndDrawParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha -= 0.03; // フェードアウト
+            p.life -= 0.03;
+
+            if (p.alpha <= 0) {
+                particles.splice(i, 1);
+                continue;
+            }
+
+            ctx.globalAlpha = p.alpha;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    // メイン描画ループ
+    function renderLoop() {
+        if (!canvas) return;
+
+        // 背景クリア
+        ctx.clearRect(0, 0, width, height);
+
+        // 全ボディの描画
+        const bodies = Composite.allBodies(world);
+        let highestY = height; // ゲームオーバー判定用（一番高いフルーツのY座標）
+
+        bodies.forEach(body => {
+            if (body.fruitIndex !== undefined) {
+                const fruitDef = FRUITS[body.fruitIndex];
+                
+                ctx.save();
+                ctx.translate(body.position.x, body.position.y);
+                ctx.rotate(body.angle);
+
+                // 背景の円を描画
+                ctx.beginPath();
+                ctx.arc(0, 0, fruitDef.radius, 0, Math.PI * 2);
+                ctx.fillStyle = fruitDef.color + '33'; // 透明度を追加して背景に
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = fruitDef.color;
+                ctx.stroke();
+
+                // 絵文字を描画
+                ctx.font = `${fruitDef.radius * 1.3}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(fruitDef.emoji, 0, 0);
+
+                ctx.restore();
+
+                // 落下中のもの（センサーでないもの）の最高到達点を記録
+                if (!body.isSensor && body.position.y < highestY) {
+                    highestY = body.position.y;
+                }
+            }
+        });
+
+        updateAndDrawParticles();
+
+        // ゲームオーバー判定
+        checkGameOver(highestY);
+
+        requestAnimationFrame(renderLoop);
+    }
+
+    // ゲームオーバー判定ロジック
+    // フルーツがライン（15%）を超えて一定時間留まったらゲームオーバー
+    let dangerTimer = 0;
+    const DANGER_THRESHOLD = 0.15; // 画面上部から15%のライン
+
+    function checkGameOver(highestY) {
+        if (isGameOver) return;
+
+        const limitY = height * DANGER_THRESHOLD;
+        
+        if (highestY < limitY) {
+            dangerTimer++;
+            dangerLine.classList.add('warning');
+            
+            // 約2秒間（60fps × 2 = 120フレーム）ラインを超え続けたらアウト
+            if (dangerTimer > 120) {
+                triggerGameOver();
+            }
+        } else {
+            dangerTimer = 0;
+            dangerLine.classList.remove('warning');
+        }
+    }
+
+    function triggerGameOver() {
+        isGameOver = true;
+        gameOverScreen.style.display = 'flex';
+        finalScoreDisplay.innerText = score;
+        
+        // 物理エンジンの一時停止
+        Runner.stop(runner);
+    }
+
+    // ゲームリセット
+    window.resetGame = function() {
+        // 全ボディを削除
+        Composite.clear(world);
+        Engine.clear(engine);
+        
+        // 床と壁を再生成
+        const ground = Bodies.rectangle(width / 2, height + WALL_THICKNESS/2 - 10, width + 100, WALL_THICKNESS, { isStatic: true });
+        const leftWall = Bodies.rectangle(-WALL_THICKNESS/2, height/2, WALL_THICKNESS, height * 2, { isStatic: true });
+        const rightWall = Bodies.rectangle(width + WALL_THICKNESS/2, height/2, WALL_THICKNESS, height * 2, { isStatic: true });
+        Composite.add(world, [ground, leftWall, rightWall]);
+
+        // ステータス初期化
+        score = 0;
+        scoreDisplay.innerText = score;
+        isGameOver = false;
+        dangerTimer = 0;
+        particles = [];
+        gameOverScreen.style.display = 'none';
+        dangerLine.classList.remove('warning');
+
+        // 再開
+        Runner.run(runner, engine);
+        generateNextFruit();
+        spawnCurrentFruit(width / 2);
+    }
+
+    // ロード時に初期化
+    window.onload = init;
+
+</script>
+</body>
+</html>
