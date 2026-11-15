@@ -314,6 +314,7 @@
         container.addEventListener('touchmove', moveFruit, { passive: false });
 
         const handleDrop = (e) => {
+            if (isGameOver) return;
             e.preventDefault(); // タッチ時のスクロール等防止
             if (currentFruit && canDrop) {
                 if(e.type === 'touchstart' || e.type === 'touchmove'){
@@ -474,24 +475,25 @@
 
     // ゲームオーバー判定ロジック
     // フルーツがライン（15%）を超えて一定時間留まったらゲームオーバー
-    let dangerTimer = 0;
+    let dangerSince = null;
+    const DANGER_DURATION = 2000;
     const DANGER_THRESHOLD = 0.15; // 画面上部から15%のライン
 
-    function checkGameOver(highestY) {
+    function checkGameOver(highestY, now = performance.now()) {
         if (isGameOver) return;
 
         const limitY = height * DANGER_THRESHOLD;
         
         if (highestY < limitY) {
-            dangerTimer++;
+            if (dangerSince === null) dangerSince = now;
             dangerLine.classList.add('warning');
             
-            // 約2秒間（60fps × 2 = 120フレーム）ラインを超え続けたらアウト
-            if (dangerTimer > 120) {
+            // 描画頻度によらず、2秒間ラインを超え続けたらアウト。
+            if (now - dangerSince >= DANGER_DURATION) {
                 triggerGameOver();
             }
         } else {
-            dangerTimer = 0;
+            dangerSince = null;
             dangerLine.classList.remove('warning');
         }
     }
@@ -521,7 +523,7 @@
         score = 0;
         scoreDisplay.innerText = score;
         isGameOver = false;
-        dangerTimer = 0;
+        dangerSince = null;
         particles = [];
         gameOverScreen.style.display = 'none';
         dangerLine.classList.remove('warning');
